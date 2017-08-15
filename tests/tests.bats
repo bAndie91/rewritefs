@@ -208,3 +208,31 @@ EOF
     [ "$status" = 0 ]
     [ "$output" = "hello" ]
 }
+
+@test "Test contexts" {
+    cat > "$CFGFILE" << EOF
+m:^test1: egg
+- /busybox/
+m:^test2: foo/bar
+- //
+m:^test2: egg
+EOF
+
+    mount_rewritefs
+
+    run busybox cat "$TESTDIR/test1"
+    [ "$status" = 0 ]
+    [ "$output" = "egg" ]
+
+    run cat "$TESTDIR/test1"
+    [ "$status" = 0 ]
+    [ "$output" = "egg" ]
+
+    run busybox cat "$TESTDIR/test2"
+    [ "$status" = 0 ]
+    [ "$output" = "bar" ]
+
+    run cat "$TESTDIR/test2"
+    [ "$status" = 0 ]
+    [ "$output" = "egg" ]
+}
