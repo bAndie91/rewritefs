@@ -11,57 +11,17 @@
 #include <libgen.h>
 #include <unistd.h>
 #include <sys/stat.h>
-#include <sys/types.h>
+#include <unistd.h>
+#include <dirent.h>
 
 #include <fuse.h>
 #include <fuse_opt.h>
-#include <pcre.h>
 
 #include "rewrite.h"
 
 #define DEBUG(lvl, x...) if(config.verbose >= lvl) fprintf(stderr, x)
 
-/*
- * Type definiton 
- */
-struct regexp {
-    pcre *regexp;
-    pcre_extra *extra;
-    int captures;
-    char *raw;
-};
-
-struct rewrite_rule {
-    struct regexp *filename_regexp;
-    char *rewritten_path; /* NULL for "." */
-    struct rewrite_rule *next;
-};
-
-struct rewrite_context {
-    struct regexp *cmdline; /* NULL for all contexts */
-    struct rewrite_rule *rules;
-    struct rewrite_context *next;
-};
-
-struct config {
-    char *config_file;
-    char *orig_fs;
-    char *mount_point;
-    struct rewrite_context *contexts;
-    int verbose;
-    int autocreate;
-};
-
-enum type {
-    CMDLINE,
-    RULE,
-    END
-};
-
-/*
- * Global variables
- */
-static struct config config;
+struct config config;
 
 /*
  * Config-file parsing
@@ -384,7 +344,18 @@ void parse_args(int argc, char **argv, struct fuse_args *outargs) {
         fprintf(stderr, "missing mount point argument\n");
         exit(1);
     }
-   
+
+    config.orig_dir = opendir(config.orig_fs);
+    if(config.orig_dir == NULL) {
+        perror("opendir() on source failed");
+        exit(1);
+    }
+
+    if(chdir(config.orig_fs) == -1) {
+        perror("chdir() on source failed");
+        exit(1);
+    }
+
     if(config.config_file) {
         if(strncmp(config.config_file, config.mount_point, strlen(config.mount_point)) == 0) {
             fprintf(stderr, "configuration file %s must not be located inside the mount point (%s)\n", config.config_file, config.mount_point);
@@ -446,6 +417,10 @@ char *get_caller_cmdline() {
 static int mkdir_parents(const char *path, mode_t mode) {
     int result = 0;
 
+    /* Assume that config.source_dir exists (we abort if it doesn't anyway) */
+    if(path[0] == 0)
+        return 0;
+
     /* dirname() could clobber its argument. */
     char *path_ = strdup(path);
 
@@ -471,16 +446,24 @@ done:
     return result;
 }
 
-char *apply_rule(const char *path, struct rewrite_rule *rule) {
+/**
+ * Returns the rewritten path, relative to chdir (which is orig_fs)
+ * If no rewrite is done, just return the given path so a malloc/free cycle can be
+ * avoided.
+ * If the return value is dynamically allocated, the pointer to be freed is stored
+ * in buf. Otherwise NULL is stored in buf.
+ */
+const char *apply_rule(const char *path, struct rewrite_rule *rule, void **buf) {
     int *ovector, nvec;
     char *rewritten, *rewritten_path, *rewritten_path_buf = NULL;
     
+    *buf = NULL;
+
     if(rule == NULL || rule->rewritten_path == NULL) {
-        rewritten = strcat(strcpy(malloc(strlen(config.orig_fs)+strlen(path)+1), config.orig_fs),
-                      path);
-        DEBUG(2, "  (ignored) %s -> %s\n", path, rewritten);
+        DEBUG(2, "  (ignored) %s\n", path);
         DEBUG(3, "\n");
-        return rewritten;
+
+        return path[1] == 0 ? "." : path+1;
     }
     
     /* Fill ovector */
@@ -534,37 +517,32 @@ char *apply_rule(const char *path, struct rewrite_rule *rule) {
         rewritten_path = rule->rewritten_path;
     }
 
-    DEBUG(4, "  orig_fs = %s\n",  config.orig_fs);
+    /* rewritten = part of path before the matched part + rewritten_path + part of path after the matched path */
+    *buf = rewritten = malloc(strlen(rewritten_path) + 1 /* \0 */ +
+        1 + ovector[0] + /* before */
+        strlen(path) - ovector[1] /* after */);
     DEBUG(4, "  begin = %s\n", strndup(path, ovector[0] + 1));
     DEBUG(4, "  rewritten = %s\n", rewritten_path);
     DEBUG(4, "  end = %s\n", path + 1 + ovector[1]);
-
-    /* rewritten = orig_fs + part of path before the matched part +
-       rewritten_path + part of path after the matched path */
-    rewritten = malloc(strlen(config.orig_fs) + strlen(rewritten_path)
-                       + 1 /* \0 */
-                       + 1 + ovector[0] /* before */
-                       + strlen(path) - ovector[1] /* after */);
-    strcpy(rewritten, config.orig_fs);
-    strncat(rewritten, path, 1 + ovector[0]);
-    strcat(rewritten, rewritten_path);
-    strcat(rewritten, path + 1 + ovector[1]);
+    strncpy(rewritten, path, 1 + ovector[0]);
+    strcpy(rewritten+1+ovector[0], rewritten_path);
+    strcpy(rewritten+1+ovector[0]+strlen(rewritten_path), path+1+ovector[1]);
 
     free(rewritten_path_buf);
     free(ovector);
 
     if(config.autocreate) {
-        if(mkdir_parents(rewritten, (S_IRWXU | S_IRWXG | S_IRWXO)) == -1)
+        if(mkdir_parents(rewritten+1, (S_IRWXU | S_IRWXG | S_IRWXO)) == -1)
             fprintf(stderr, "Warning: %s -> %s: autocreating parents failed: %s\n",
                     path, rewritten, strerror(errno));
     }
 
     DEBUG(1, "  %s -> %s\n", path, rewritten);
     DEBUG(3, "\n");
-    return rewritten;
+    return rewritten[1] == 0 ? "." : rewritten+1;
 }
 
-char *rewrite(const char *path) {
+const char *rewrite(const char *path, void **buf) {
     struct rewrite_context *ctx;
     struct rewrite_rule *rule;
     char *caller = NULL;
@@ -600,11 +578,11 @@ char *rewrite(const char *path) {
             } else {
                 DEBUG(3, "    RULE OK \"%s\" \"%s\"\n", rule->filename_regexp->raw, rule->rewritten_path ? rule->rewritten_path : "(don't rewrite)");
                 free(caller);
-                return apply_rule(path, rule);
+                return apply_rule(path, rule, buf);
             }
         }
     }
     
     free(caller);
-    return apply_rule(path, NULL);
+    return apply_rule(path, NULL, buf);
 }
