@@ -585,8 +585,14 @@ static struct fuse_operations rewrite_oper = {
 
 int main(int argc, char *argv[]) {
     struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
+    char *orig_fs;
 
     umask(0);
-    parse_args(argc, argv, &args);
+    parse_args(argc, argv, &args, &orig_fs);
+    if(chdir(orig_fs) != 0)
+    {
+    	warn("chdir: %s", orig_fs);
+    	return -1;
+    }
     return fuse_main(args.argc, args.argv, &rewrite_oper, NULL);
 }

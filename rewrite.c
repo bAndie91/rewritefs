@@ -344,7 +344,7 @@ static int options_proc(void *data, const char *arg, int key, struct fuse_args *
     return 1;
 }
 
-void parse_args(int argc, char **argv, struct fuse_args *outargs) {
+void parse_args(int argc, char **argv, struct fuse_args *outargs, char **orig_fs) {
     FILE *fd;
     
     memset(&config, 0, sizeof(config));
@@ -363,6 +363,7 @@ void parse_args(int argc, char **argv, struct fuse_args *outargs) {
         }
         if(config.orig_fs[strlen(config.orig_fs)-1] == '/')
             config.orig_fs[strlen(config.orig_fs)-1] = 0;
+        *orig_fs = config.orig_fs;
     }
 
     if(config.mount_point == NULL) {
@@ -426,7 +427,7 @@ char *apply_rule(const char *path, struct rewrite_rule *rule) {
     char *rewritten, *rewritten_path, *rewritten_path_buf = NULL;
     
     if(rule == NULL || rule->rewritten_path == NULL) {
-        rewritten = strcat(strcpy(abmalloc(strlen(config.orig_fs)+strlen(path)+1), config.orig_fs),
+        rewritten = strcat(strcpy(abmalloc(1+strlen(path)+1), "."),
                       path);
         DEBUG(2, "  (ignored) %s -> %s\n", path, rewritten);
         DEBUG(3, "\n");
@@ -491,11 +492,11 @@ char *apply_rule(const char *path, struct rewrite_rule *rule) {
 
     /* rewritten = orig_fs + part of path before the matched part +
        rewritten_path + part of path after the matched path */
-    rewritten = abmalloc(strlen(config.orig_fs) + strlen(rewritten_path)
+    rewritten = abmalloc(1 /* "." */ + strlen(rewritten_path)
                        + 1 /* \0 */
                        + 1 + ovector[0] /* before */
                        + strlen(path) - ovector[1] /* after */);
-    strcpy(rewritten, config.orig_fs);
+    strcpy(rewritten, ".");
     strncat(rewritten, path, 1 + ovector[0]);
     strcat(rewritten, rewritten_path);
     strcat(rewritten, path + 1 + ovector[1]);
