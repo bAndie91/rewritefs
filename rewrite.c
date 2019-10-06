@@ -58,6 +58,16 @@ enum type {
  */
 static struct config config;
 
+void* abmalloc(size_t size)
+{
+	void *p = malloc(size);
+    if(p == NULL) {
+        perror("malloc");
+        abort();
+    }
+    return p;
+}
+
 /*
  * Config-file parsing
  */
@@ -100,12 +110,8 @@ static void parse_string(FILE *fd, char **string, char sep) {
     int escaped = 0;
     int c;
     
-    *string = (char*)malloc(string_cap);
+    *string = (char*)abmalloc(string_cap);
     **string = 0;
-    if(*string == NULL) {
-        perror("malloc");
-        abort();
-    }
     for(;;) {
         c = getc(fd);
         if(c == EOF) {
@@ -184,11 +190,7 @@ static void parse_regexp(FILE *fd, struct regexp **regexp, char sep) {
     }
     
     /* Compilation */
-    *regexp = malloc(sizeof(struct regexp));
-    if(regexp == NULL) {
-        perror("malloc");
-        abort();
-    }
+    *regexp = abmalloc(sizeof(struct regexp));
     
     (*regexp)->regexp = pcre_compile(regexp_body, regexp_flags, &error, &offset, NULL);
     if((*regexp)->regexp == NULL) {
@@ -247,37 +249,23 @@ static void parse_config(FILE *fd) {
     struct rewrite_rule *rule, *last_rule = NULL;
     
     struct rewrite_context *new_context;
-    struct rewrite_context *current_context = malloc(sizeof(struct rewrite_context));
-    if(current_context == NULL) {
-        perror("malloc");
-        abort();
-    } else {
-        current_context->cmdline = NULL;
-        current_context->rules = NULL;
-        current_context->next = NULL;
-        config.contexts = current_context;
-    }
+    struct rewrite_context *current_context = abmalloc(sizeof(struct rewrite_context));
+    current_context->cmdline = NULL;
+    current_context->rules = NULL;
+    current_context->next = NULL;
+    config.contexts = current_context;
     
     do {
         parse_item(fd, &type, &regexp, &string);
         if(type == CMDLINE) {
-            new_context = malloc(sizeof(struct rewrite_context));
-            if(new_context == NULL) {
-                perror("malloc");
-                abort();
-            } else {
-                new_context->cmdline = !strcmp(regexp->raw, "") ? NULL : regexp;
-                new_context->rules = last_rule = NULL;
-                new_context->next = NULL;
-                current_context->next = new_context;
-                current_context = new_context;
-            }
+            new_context = abmalloc(sizeof(struct rewrite_context));
+            new_context->cmdline = !strcmp(regexp->raw, "") ? NULL : regexp;
+            new_context->rules = last_rule = NULL;
+            new_context->next = NULL;
+            current_context->next = new_context;
+            current_context = new_context;
         } else if(type == RULE) {
-            rule = malloc(sizeof(struct rewrite_rule));
-            if(rule == NULL) {
-                perror("malloc");
-                abort();
-            }
+            rule = abmalloc(sizeof(struct rewrite_rule));
             
             rule->filename_regexp = regexp;
             rule->rewritten_path = (!strcmp(string, ".")) ? (free(string), NULL) : string;
@@ -414,14 +402,8 @@ char *get_caller_cmdline() {
     char path[PATH_MAX];
     FILE *fd;
     int size = 0, cap = 255, c;
-    char *ret = malloc(cap);
-    
-    if(ret == NULL) {
-        perror("malloc");
-        abort();
-    } else {
-        *ret = 0;
-    }
+    char *ret = abmalloc(cap);
+    *ret = 0;
     
     snprintf(path, PATH_MAX, "/proc/%d/cmdline", fuse_get_context()->pid);
     fd = fopen(path, "r");
@@ -444,7 +426,7 @@ char *apply_rule(const char *path, struct rewrite_rule *rule) {
     char *rewritten, *rewritten_path, *rewritten_path_buf = NULL;
     
     if(rule == NULL || rule->rewritten_path == NULL) {
-        rewritten = strcat(strcpy(malloc(strlen(config.orig_fs)+strlen(path)+1), config.orig_fs),
+        rewritten = strcat(strcpy(abmalloc(strlen(config.orig_fs)+strlen(path)+1), config.orig_fs),
                       path);
         DEBUG(2, "  (ignored) %s -> %s\n", path, rewritten);
         DEBUG(3, "\n");
@@ -475,7 +457,7 @@ char *apply_rule(const char *path, struct rewrite_rule *rule) {
             }
         }
 
-        rewritten_path = rewritten_path_buf = malloc(rewritten_size + 1);
+        rewritten_path = rewritten_path_buf = abmalloc(rewritten_size + 1);
 
         for(i = 0, wpos = 0; i < strlen(rule->rewritten_path); i++) {
             if(rule->rewritten_path[i] == '\\') {
@@ -509,7 +491,7 @@ char *apply_rule(const char *path, struct rewrite_rule *rule) {
 
     /* rewritten = orig_fs + part of path before the matched part +
        rewritten_path + part of path after the matched path */
-    rewritten = malloc(strlen(config.orig_fs) + strlen(rewritten_path)
+    rewritten = abmalloc(strlen(config.orig_fs) + strlen(rewritten_path)
                        + 1 /* \0 */
                        + 1 + ovector[0] /* before */
                        + strlen(path) - ovector[1] /* after */);
