@@ -17,35 +17,6 @@
 
 #define DEBUG(lvl, x...) if(config.verbose >= lvl) fprintf(stderr, x)
 
-/*
- * Type definiton 
- */
-struct regexp {
-    pcre *regexp;
-    pcre_extra *extra;
-    int captures;
-    char *raw;
-};
-
-struct rewrite_rule {
-    struct regexp *filename_regexp;
-    char *rewritten_path; /* NULL for "." */
-    struct rewrite_rule *next;
-};
-
-struct rewrite_context {
-    struct regexp *cmdline; /* NULL for all contexts */
-    struct rewrite_rule *rules;
-    struct rewrite_context *next;
-};
-
-struct config {
-    char *config_file;
-    char *orig_fs;
-    char *mount_point;
-    struct rewrite_context *contexts;
-    int verbose;
-};
 
 enum type {
     CMDLINE,
@@ -53,10 +24,6 @@ enum type {
     END
 };
 
-/*
- * Global variables
- */
-static struct config config;
 
 void* abmalloc(size_t size)
 {
@@ -294,6 +261,7 @@ static struct fuse_opt options[] = {
     REWRITE_OPT("config=%s",       config_file, 0),
     REWRITE_OPT("-v %i",           verbose, 0),
     REWRITE_OPT("verbose=%i",      verbose, 0),
+    REWRITE_OPT("auto_mkdir",      auto_mkdir, 1),
 
     FUSE_OPT_KEY("-V",             KEY_VERSION),
     FUSE_OPT_KEY("--version",      KEY_VERSION),
@@ -330,6 +298,7 @@ static int options_proc(void *data, const char *arg, int key, struct fuse_args *
                 "    -c CONFIG        path to configuration file\n"
                 "    -r PATH          path to source filesystem\n"
                 "    -v LEVEL         verbose level [to be used with -f or -d]\n"
+                "    -o auto_mkdir    create directory when a rewritten file is being created\n"
                 "\n",
                 outargs->argv[0]);
         fuse_opt_add_arg(outargs, "-ho");
@@ -344,7 +313,7 @@ static int options_proc(void *data, const char *arg, int key, struct fuse_args *
     return 1;
 }
 
-void parse_args(int argc, char **argv, struct fuse_args *outargs, char **orig_fs) {
+void parse_args(int argc, char **argv, struct fuse_args *outargs) {
     FILE *fd;
     
     memset(&config, 0, sizeof(config));
@@ -363,7 +332,6 @@ void parse_args(int argc, char **argv, struct fuse_args *outargs, char **orig_fs
         }
         if(config.orig_fs[strlen(config.orig_fs)-1] == '/')
             config.orig_fs[strlen(config.orig_fs)-1] = 0;
-        *orig_fs = config.orig_fs;
     }
 
     if(config.mount_point == NULL) {
@@ -372,11 +340,6 @@ void parse_args(int argc, char **argv, struct fuse_args *outargs, char **orig_fs
     }
    
     if(config.config_file) {
-        if(strncmp(config.config_file, config.mount_point, strlen(config.mount_point)) == 0) {
-            fprintf(stderr, "configuration file %s must not be located inside the mount point (%s)\n", config.config_file, config.mount_point);
-            exit(1);
-        }
-
         fd = fopen(config.config_file, "r");
         if(fd == NULL) {
             perror("opening config file");

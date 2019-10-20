@@ -23,6 +23,7 @@
 #include <errno.h>
 #include <sys/time.h>
 #include <pthread.h>
+#include <pcre.h>
 #ifdef HAVE_SETXATTR
 #include <sys/xattr.h>
 #endif
@@ -588,10 +589,10 @@ int main(int argc, char *argv[]) {
     char *orig_fs;
 
     umask(0);
-    parse_args(argc, argv, &args, &orig_fs);
-    if(chdir(orig_fs) != 0)
+    parse_args(argc, argv, &args);
+    if(chdir(config.orig_fs) != 0)
     {
-    	warn("chdir: %s", orig_fs);
+    	warn("chdir: %s", config.orig_fs);
     	return -1;
     }
     return fuse_main(args.argc, args.argv, &rewrite_oper, NULL);
