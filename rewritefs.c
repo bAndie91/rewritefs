@@ -24,6 +24,7 @@
 #include <sys/time.h>
 #include <pthread.h>
 #include <pcre.h>
+#include <err.h>
 #ifdef HAVE_SETXATTR
 #include <sys/xattr.h>
 #endif
@@ -154,6 +155,11 @@ static int rewrite_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     while (1) {
         struct stat st;
         off_t nextoff;
+        
+        /* NOTE: we can not list files which otherwise CAN be operated upon
+           (eg. stat(), open(), ...) in a given directory, because there is
+           no reverse mapping. but we can hide directory entries which have
+           to be rewritten. */
 
         if (!d->entry) {
             RLOCK(d->entry = readdir(d->dp));
@@ -183,13 +189,45 @@ static int rewrite_releasedir(const char *path, struct fuse_file_info *fi) {
     return 0;
 }
 
+void mkparents(const char * path, const bool is_leaf)
+{
+	/* Attempt to make all missing parent directories of 'path' */
+	char * parent;
+	char * slash;
+	
+	parent = strdup(path);
+	if(parent == NULL) { return /* malloc failure */; }
+	
+	slash = strrchr(parent, '/');
+	if(slash != NULL)
+	{
+		*slash = '\0';
+		if(access(parent, F_OK) != 0)
+			mkparents(parent, FALSE);
+		free(parent);
+	}
+	
+	if(!is_leaf)
+		if(mkdir(path, 0777) != 0)
+			warn("mkdir");
+}
+
+void auto_mkparents(const char * orig_path, const char * path)
+{
+   	if(config.auto_mkdir && strcmp(orig_path, path)!=0)
+   		mkparents(path, TRUE);
+}
+
 static int rewrite_mknod(const char *path, mode_t mode, dev_t rdev) {
     int res;
     char *new_path = rewrite(path);
     if (new_path == NULL)
         return -ENOMEM;
 
-    WLOCK(res = mknod(new_path, mode, rdev));
+    WLOCK(
+    	auto_mkparents(path, new_path);
+    	res = mknod(new_path, mode, rdev)
+    );
     free(new_path);
     if (res == -1)
         return -errno;
@@ -203,7 +241,10 @@ static int rewrite_mkdir(const char *path, mode_t mode) {
     if (new_path == NULL)
         return -ENOMEM;
 
-    WLOCK(res = mkdir(new_path, mode));
+    WLOCK(
+   		auto_mkparents(path, new_path);
+	    res = mkdir(new_path, mode)
+	);
     free(new_path);
     if (res == -1)
         return -errno;
@@ -245,7 +286,10 @@ static int rewrite_symlink(const char *from, const char *to) {
     if ((new_to = rewrite(to)) == NULL)
         return -ENOMEM;
 
-    WLOCK(res = symlink(from, new_to));
+    WLOCK(
+   		auto_mkparents(to, new_to);
+	    res = symlink(from, new_to)
+	);
     free(new_to);
     if (res == -1)
         return -errno;
@@ -264,6 +308,7 @@ static int rewrite_rename(const char *from, const char *to) {
     }
 
     RLOCK(res = rename(new_from, new_to));
+    // TODO: 'new_to' should be subject of auto_mkdir option.
     free(new_from);
     free(new_to);
     if (res == -1)
@@ -283,6 +328,7 @@ static int rewrite_link(const char *from, const char *to) {
     }
 
     RLOCK(res = link(new_from, new_to));
+    // TODO: 'new_to' should be subject of auto_mkdir option.
     free(new_from);
     free(new_to);
     if (res == -1)
@@ -372,7 +418,10 @@ static int rewrite_create(const char *path, mode_t mode, struct fuse_file_info *
     if (new_path == NULL)
         return -ENOMEM;
 
-    WLOCK(fd = open(new_path, fi->flags | O_CREAT, mode));
+    WLOCK(
+   		auto_mkparents(path, new_path);
+	    fd = open(new_path, fi->flags | O_CREAT, mode)
+	);
     free(new_path);
     if (fd == -1)
         return -errno;
@@ -388,7 +437,10 @@ static int rewrite_open(const char *path, struct fuse_file_info *fi) {
         return -ENOMEM;
 
     if (fi->flags & O_CREAT) {
-        WLOCK(fd = open(new_path, fi->flags));
+        WLOCK(
+   			auto_mkparents(path, new_path);
+	    	fd = open(new_path, fi->flags)
+	    );
     } else {
         RLOCK(fd = open(new_path, fi->flags));
     }
@@ -586,7 +638,6 @@ static struct fuse_operations rewrite_oper = {
 
 int main(int argc, char *argv[]) {
     struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
-    char *orig_fs;
 
     umask(0);
     parse_args(argc, argv, &args);

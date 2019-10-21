@@ -4,6 +4,11 @@ char *rewrite(const char *path);
 /*
  * Type definiton 
  */
+
+typedef char bool;
+#define FALSE 0
+#define TRUE (!FALSE)
+
 struct regexp {
     pcre *regexp;
     pcre_extra *extra;
